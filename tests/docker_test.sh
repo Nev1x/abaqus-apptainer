@@ -24,7 +24,12 @@ if [ -n "$CAE" ]; then
     CAE_ARG=/data/model.cae
 fi
 
-docker run --rm --privileged \
+OUT_MOUNT=()
+if [ -n "${ABQ_TEST_OUT:-}" ]; then
+    mkdir -p "$ABQ_TEST_OUT"; OUT_MOUNT=(-v "$(cd "$ABQ_TEST_OUT" && pwd)":/out)
+fi
+
+docker run --rm --privileged ${OUT_MOUNT[@]+"${OUT_MOUNT[@]}"} \
     -v "$(pwd)":/src:ro -v "$INPUTS":/data/inputs:ro -v "$WORK/rockylinux8.tar":/tmp/rockylinux8.tar:ro \
     ${CAE_MOUNT[@]+"${CAE_MOUNT[@]}"} \
     rockylinux:8 bash -euc "
@@ -38,7 +43,8 @@ docker run --rm --privileged \
         apptainer build -F /home/student/fake-abaqus.sif tests/fake-abaqus.def > /tmp/build.log 2>&1 \
             || { cat /tmp/build.log; exit 1; }
         chown -R student: /home/student
+        [ -d /out ] && chmod 777 /out
         # Docker Desktop (macOS) не даёт FUSE вложенному контейнеру, поэтому образ
         # распаковывается во временный каталог (--unsquash). На Linux-сервере это не нужно.
-        su student -c 'cd ~/proj && APPTAINER_FLAGS=--unsquash tests/run_tests.sh ~/fake-abaqus.sif /data/inputs $CAE_ARG'
+        su student -c 'cd ~/proj && ABQ_TEST_OUT=\$( [ -d /out ] && echo /out ) APPTAINER_FLAGS=--unsquash tests/run_tests.sh ~/fake-abaqus.sif /data/inputs $CAE_ARG'
     "

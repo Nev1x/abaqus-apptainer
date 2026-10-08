@@ -108,6 +108,14 @@ if [ -n "$CAE" ]; then
     check "временная копия .cae удалена" test ! -e /tmp/abq-export/_model.cae
 fi
 
+# Сохранить журналы для отчёта/методички (если задан ABQ_TEST_OUT)
+if [ -n "${ABQ_TEST_OUT:-}" ]; then
+    mkdir -p "$ABQ_TEST_OUT"
+    cp /tmp/q*.log /tmp/status.txt /tmp/ds.log "$ABQ_TEST_OUT"/ 2>/dev/null || true
+    cp dataset/summary.csv "$ABQ_TEST_OUT"/ 2>/dev/null || true
+    cp "results/$FIRST/job.meta" "$ABQ_TEST_OUT"/job.meta 2>/dev/null || true
+fi
+
 echo
 echo "Итог: пройдено $pass, ошибок $fail"
 [ $fail -eq 0 ]
