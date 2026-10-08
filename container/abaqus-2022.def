@@ -1,0 +1,68 @@
+# Apptainer/Singularity: решатель Abaqus 2022 (SIMULIA Established Products) на Rocky Linux 8.
+#
+# Основано на https://github.com/mwierszycki/Abaqus-in-Apptainer-Singularity-container
+# Отличия: версия 2022, базовый образ из Docker Hub (на хосте не нужен dnf), без Intel oneAPI
+# (в задачах нет пользовательских подпрограмм — компилятор Fortran не нужен), пути к
+# инсталлятору ищутся автоматически (номера частей дистрибутива различаются между версиями).
+#
+# Сборка (из корня проекта, каталог media/ подготовлен по README, раздел 3):
+#   sudo apptainer build abaqus-2022.sif container/abaqus-2022.def
+#   # или без root:  apptainer build --fakeroot abaqus-2022.sif container/abaqus-2022.def
+#
+# Ожидаемое содержимое media/:
+#   *.AM_SIM_Abaqus_Extend.AllOS.*.tar    — части дистрибутива Abaqus 2022
+#   UserIntentions_CODE.xml               — ответы для тихой установки (container/make_userintentions.sh)
+
+Bootstrap: docker
+From: rockylinux:8
+
+%labels
+    Description Abaqus 2022 solver (batch, без GUI)
+    Abaqus.Version 2022
+
+%setup
+    # Выполняется на хосте: распаковываем дистрибутив сразу в корень будущего образа,
+    # чтобы не копировать ~10 ГБ архивов внутрь отдельным слоем.
+    set -e
+    mkdir -p "${APPTAINER_ROOTFS}/media"
+    for t in media/*.AM_SIM_Abaqus_Extend.AllOS.*.tar; do
+        tar xf "$t" -C "${APPTAINER_ROOTFS}/media/"
+    done
+    cp media/UserIntentions_CODE.xml "${APPTAINER_ROOTFS}/media/"
+
+%post
+    set -e
+    # Зависимости инсталлятора и решателя. X-библиотеки нужны "abaqus python" и
+    # "abaqus cae noGUI" (постобработка), самому решателю достаточно первой строки.
+    dnf -y install which ksh perl tar gzip hostname procps-ng redhat-lsb-core \
+        libstdc++ zlib glibc-langpack-en \
+        mesa-libGL mesa-libGLU libXext libXrender libXtst libXi libXmu libXft libXpm libjpeg-turbo
+    dnf clean all
+
+    # Rocky Linux нет в списке поддерживаемых ОС: заставляем проверку считать систему CentOS
+    # (тот же приём, что в исходном репозитории).
+    for f in $(find /media -name CheckPrereq.sh -path '*Linux*'); do
+        chmod a+w "$f"
+        sed -i '/DSY_OS_Release=/a DSY_OS_Release="centos"' "$f"
+        chmod a-w "$f"
+    done
+
+    TUI=$(find /media -path '*SIMULIA_EstablishedProducts/Linux64/1/StartTUI.sh' | head -n1)
+    test -n "$TUI" || { echo "StartTUI.sh не найден в дистрибутиве" >&2; exit 1; }
+    "$TUI" --silent /media/UserIntentions_CODE.xml
+
+    # Проверяем, что команда abaqus установлена, и удаляем дистрибутив из образа
+    test -x /var/DassaultSystemes/SIMULIA/Commands/abaqus
+    rm -rf /media
+    dnf -y remove perl || true
+
+%environment
+    export PATH=/var/DassaultSystemes/SIMULIA/Commands:$PATH
+    export LANG=en_US.UTF-8
+    export LC_ALL=en_US.UTF-8
+
+%runscript
+    exec abaqus "$@"
+
+%test
+    /var/DassaultSystemes/SIMULIA/Commands/abaqus information=release

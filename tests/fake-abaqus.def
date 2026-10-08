@@ -1,0 +1,16 @@
+# Тестовый образ: та же структура, что у container/abaqus-2022.def, но вместо Abaqus —
+# заглушка tests/fake_abaqus.sh. Нужен только для проверки скриптов без дистрибутива.
+Bootstrap: docker-archive
+From: /tmp/rockylinux8.tar
+
+%files
+    tests/fake_abaqus.sh /var/DassaultSystemes/SIMULIA/Commands/abaqus
+
+%post
+    chmod 755 /var/DassaultSystemes/SIMULIA/Commands/abaqus
+
+%environment
+    export PATH=/var/DassaultSystemes/SIMULIA/Commands:$PATH
+
+%runscript
+    exec abaqus "$@"
