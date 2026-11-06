@@ -23,3 +23,6 @@ __pycache__/
 abaqus.rpy*
 *.lck
 .playwright-mcp/
+
+# OpenCourant: скачанный образ и рабочие файлы
+opencourant/image/

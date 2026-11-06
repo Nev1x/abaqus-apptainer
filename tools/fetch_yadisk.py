@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -23,10 +24,28 @@ API = "https://cloud-api.yandex.net/v1/disk/public/resources"
 DEFAULT_URL = "https://disk.yandex.ru/d/nR2yRT3GM2aCyg"
 
 
+def get_json(url):
+    """GET с тихими повторами: Яндекс.Диск при частых запросах временно отвечает 429."""
+    waits = [15, 30, 60, 120, 240]
+    for attempt in range(len(waits) + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504) or attempt == len(waits):
+                raise SystemExit(f"Яндекс.Диск ответил ошибкой {e.code}. Если это 429 — сервис временно "
+                                 f"ограничил запросы: подождите 10–30 минут и запустите снова, или скачайте "
+                                 f"файлы браузером по ссылке и положите их в каталог назначения.")
+            time.sleep(waits[attempt])
+        except OSError as e:
+            if attempt == len(waits):
+                raise SystemExit(f"нет связи с Яндекс.Диском: {e}")
+            time.sleep(waits[attempt])
+
+
 def api(path, public_key, **params):
     q = urllib.parse.urlencode(dict(public_key=public_key, path=path, **params))
-    with urllib.request.urlopen(f"{API}?{q}", timeout=60) as r:
-        return json.load(r)
+    return get_json(f"{API}?{q}")
 
 
 def walk(public_key, path="/"):
@@ -52,8 +71,7 @@ def download(public_key, item, dest_root):
         return out
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     q = urllib.parse.urlencode(dict(public_key=public_key, path=item["path"]))
-    with urllib.request.urlopen(f"{API}/download?{q}", timeout=60) as r:
-        href = json.load(r)["href"]
+    href = get_json(f"{API}/download?{q}")["href"]
     tmp = out + ".part"
     t0 = time.time()
     for attempt in range(5):
