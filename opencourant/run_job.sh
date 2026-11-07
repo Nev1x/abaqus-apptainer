@@ -53,17 +53,26 @@ log "[2/6] перевожу Abaqus .inp в формат OpenCourant (inp2rad)"
 echo | oc python3 /opt/OpenCourant/openradioss_gui/inp2rad.py model.inp > convert.log 2>&1 || true
 [ -s model_0000.rad ] && [ -s model_0001.rad ] || fail convert "конвертация не удалась — см. $D/convert.log"
 
-log "[3/6] настраиваю вывод: анимация каждые $ANIM_DT с (вместо 0.01)"
+log "[3/6] дописываю то, что конвертер теряет: разрушение волокон, пластичность матрицы (tools/patch_rad.py)"
+# inp2rad молча пропускает *Damage Initiation, criterion=DUCTILE — без этого волокна не рвутся
+oc python3 "$PROJECT_DIR/tools/patch_rad.py" model.inp model_0000.rad > patch.log 2>&1 \
+    || fail patch "не удалось дополнить модель — см. $D/patch.log"
+# анимация каждые ANIM_DT с вместо 0.01 — в 25 раз меньше места на диске
 sed -i "/^\/ANIM\/DT/{n;s/.*/0  $ANIM_DT/}" model_0001.rad
+# после разрыва волокна соседние элементы матрицы выворачиваются, шаг по времени падает
+# в сотни раз и расчёт останавливается по ошибке энергии. Как Abaqus (удаление
+# вырожденных элементов): элемент, чей шаг стал меньше DT_DEL, удаляется
+DT_DEL=${DT_DEL:-2e-6}
+sed -i "/^\/DT1TET10/i /DT/BRICK/DEL\n0.9  $DT_DEL" model_0001.rad
 
 log "[4/6] starter: проверка модели и разбиение на $NP доменов"
 oc starter_sp -i model_0000.rad -np "$NP" -nt 1 > starter.log 2>&1 || true
 grep -q "NORMAL TERMINATION\|TERMINATION WITH WARNING" starter.log && grep -qE "^ +0 ERROR\(S\)" starter.log \
     || fail starter "starter нашёл ошибки в модели — см. $D/model_0000.out (ищите 'ERROR ID')"
 
-log "[5/6] engine: расчёт на $NP ядрах (на 16 ядрах ~5 мин; ход: tail -f $D/engine.log)"
+log "[5/6] engine: расчёт на $NP ядрах (на 16 ядрах ~10 мин; ход: tail -f $D/engine.log)"
 oc mpirun --bind-to none -np "$NP" engine_ompi_sp -i model_0001.rad > engine.log 2>&1 || true
-grep -q "NORMAL TERMINATION" engine.log || fail engine "расчёт не завершился нормально — см. конец $D/engine.log"
+grep -q "NORMAL TERMINATION" engine.log && ! grep -q "RUN KILLED" engine.log || fail engine "расчёт не завершился нормально — см. конец $D/engine.log"
 CYCLES=$(grep "TOTAL NUMBER OF CYCLES" engine.log | awk '{print $NF}')
 
 log "[6/6] извлекаю кривую RF3(U3) и чищу временные файлы"

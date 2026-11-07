@@ -5,7 +5,8 @@
 
 Создаёт в каталоге report/:
   summary.csv     — по строке на задачу: модуль волокна, жёсткость (расчёт и правило
-                    смесей), силы при U3 = 1, 2, 5, время счёта
+                    смесей), пиковая сила и перемещение разрыва волокон, остаточная
+                    сила матрицы (U3 = 2), время счёта
   curves.svg      — кривые RF3(U3) всех задач (цвет — модуль волокна)
   stiffness.svg   — начальная жёсткость: расчёт против правила смесей
 Графики открываются в любом браузере.
@@ -39,6 +40,28 @@ def slope(pts):
 
 def at(curve, u):
     return min(curve, key=lambda p: abs(p[0] - u))[1]
+
+
+def first_peak(curve):
+    """Пик до первого обрыва (сила упала ниже половины максимума) — прочность образца.
+    После обрыва, когда рвётся матрица, в истории бывают численные выбросы — их не берём."""
+    best = (0.0, 0.0)
+    for u, f in curve:
+        if f > best[1]:
+            best = (u, f)
+        elif best[1] > 0 and f < 0.5 * best[1]:
+            break
+    return best
+
+
+def every(rows, dt=0.02):
+    """Отсчёты через dt по времени — как история Abaqus (*Output, history, time interval=0.02)."""
+    out, nxt = [], 0.0
+    for t, u, f in rows:
+        if t >= nxt - 1e-9:
+            out.append((u, f))
+            nxt += dt
+    return out
 
 
 # ---------- SVG ----------
@@ -119,18 +142,20 @@ def main(results, out):
                "wall_seconds": meta.get("wall_seconds", ""), "cycles": meta.get("cycles", ""), "curve": []}
         cpath = os.path.join(d, "curve.csv")
         if status == "DONE" and os.path.exists(cpath):
-            c = [(float(r["U3"]), float(r["RF3"])) for r in csv.DictReader(open(cpath))]
-            row["curve"] = c
+            raw = [(float(r["time"]), float(r["U3"]), float(r["RF3"])) for r in csv.DictReader(open(cpath))]
+            c = [(u, f) for _, u, f in raw]
+            row["curve"] = every(raw)
             umax = max(u for u, _ in c)
             row["k_sim"] = slope([p for p in c if 0.04 * umax < p[0] < 0.16 * umax])
             row["k_diff_%"] = (row["k_sim"] / row["k_rule_of_mixtures"] - 1) * 100
-            for u in (1, 2, 5):
+            for u in (1, 2):
                 row["F_at_U%d" % u] = at(c, u)
-            row["F_max"] = max(f for _, f in c)
+            # пик — прочность образца; где он — там рвутся волокна
+            row["U_at_Fmax"], row["F_max"] = first_peak(c)
         rows.append(row)
 
     cols = ["job", "status", "fibre_material", "E_fibre_GPa", "k_sim", "k_rule_of_mixtures", "k_diff_%",
-            "F_at_U1", "F_at_U2", "F_at_U5", "F_max", "cycles", "wall_seconds"]
+            "F_max", "U_at_Fmax", "F_at_U1", "F_at_U2", "cycles", "wall_seconds"]
     with open(os.path.join(out, "summary.csv"), "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(cols)
@@ -144,13 +169,13 @@ def main(results, out):
     emin = min(r["E_fibre_GPa"] for r in done)
     emax = max(r["E_fibre_GPa"] for r in done)
     span = (emax - emin) or 1
-    ser = [{"kind": "line", "color": ramp((r["E_fibre_GPa"] - emin) / span), "width": 1.2,
-            "pts": [(u, f / 1e12) for u, f in r["curve"][::20]]} for r in sorted(done, key=lambda r: r["E_fibre_GPa"])]
     fmax = max(r["F_max"] for r in done) / 1e12
+    ser = [{"kind": "line", "color": ramp((r["E_fibre_GPa"] - emin) / span), "width": 1.2,
+            "pts": [(u, max(-0.5, min(f / 1e12, fmax * 1.1))) for u, f in r["curve"]]} for r in sorted(done, key=lambda r: r["E_fibre_GPa"])]
     svg_chart(os.path.join(out, "curves.svg"),
               "Сила RF3 от перемещения U3, %d задач (цвет — модуль волокна)" % len(done),
-              "перемещение опорной точки U3", "сила RF3, ×10¹²", ser, (0, 5), (0, fmax * 1.1),
-              notes=["светлее — %.0f ГПа, темнее — %.0f ГПа" % (emin, emax)])
+              "перемещение опорной точки U3", "сила RF3, ×10¹²", ser, (0, 5), (-0.5, fmax * 1.1),
+              notes=["светлее — %.0f ГПа, темнее — %.0f ГПа; отсчёты через 0,02 с, как в Abaqus" % (emin, emax)])
     pts = [(r["E_fibre_GPa"], r["k_sim"] / 1e12) for r in done]
     rm = sorted((r["E_fibre_GPa"], r["k_rule_of_mixtures"] / 1e12) for r in done)
     ys = [p[1] for p in pts] + [p[1] for p in rm]
