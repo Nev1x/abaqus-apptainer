@@ -26,3 +26,5 @@ abaqus.rpy*
 
 # OpenCourant: скачанный образ и рабочие файлы
 opencourant/image/
+# Служебные файлы Word (документ открыт)
+~$*
