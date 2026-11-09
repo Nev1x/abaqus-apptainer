@@ -52,11 +52,20 @@ fi
 # Apptainer без root не может смонтировать .sif — тогда распаковываем образ в каталог.
 IMAGE="$SIF"
 if ! apptainer exec "$SIF" true 2>/dev/null; then
-    log "образ не монтируется (нет FUSE) — распаковываю в каталог, это нормально (~1 мин)"
-    rm -rf "$IMG_DIR/sandbox"
-    apptainer build --sandbox "$IMG_DIR/sandbox" "$SIF" >/dev/null 2>&1 || die "не удалось распаковать образ"
     IMAGE="$IMG_DIR/sandbox"
-    apptainer exec "$IMAGE" true || die "образ не запускается даже распакованным — см. README, «Неполадки»"
+    # повторный запуск setup.sh: уже распакованный и рабочий каталог того же образа не трогаем
+    if [ "$(cat "$IMG_DIR/sandbox.sha256" 2>/dev/null)" = "$WANT" ] && apptainer exec "$IMAGE" true 2>/dev/null; then
+        log "образ уже распакован в каталог: $IMAGE"
+    else
+        log "образ не монтируется (нет FUSE) — распаковываю в каталог, это нормально (~1 мин)"
+        # в распакованном образе есть каталоги без права записи — без chmod rm их не удалит
+        [ -e "$IMAGE" ] && { chmod -R u+w "$IMAGE" 2>/dev/null; rm -rf "$IMAGE"; }
+        [ -e "$IMAGE" ] && die "не удалось удалить старый каталог $IMAGE — удалите его вручную и повторите"
+        rm -f "$IMG_DIR/sandbox.sha256"
+        apptainer build --sandbox "$IMAGE" "$SIF" >/dev/null 2>&1 || die "не удалось распаковать образ"
+        apptainer exec "$IMAGE" true || die "образ не запускается даже распакованным — см. README, «Неполадки»"
+        echo "$WANT" > "$IMG_DIR/sandbox.sha256"
+    fi
 fi
 echo "$IMAGE" > "$IMG_DIR/IMAGE"
 echo "$ARCH" > "$IMG_DIR/ARCH"
@@ -64,9 +73,16 @@ echo "$VERSION" > "$IMG_DIR/VERSION"
 
 # Проверяем, что внутри есть всё нужное
 load_image
-for exe in starter_sp engine_ompi_sp "th_to_csv_$ARCH" mpirun python3; do
+for exe in starter_sp engine_ompi_sp mpirun python3; do
     oc which "$exe" >/dev/null 2>&1 || die "в образе нет программы $exe"
 done
+# конвертер истории в CSV называется по-разному: th_to_csv_linuxa64 (ARM), th_to_csv_linux64_gf (x86-64)
+TH=""
+for exe in "th_to_csv_$ARCH" "th_to_csv_${ARCH}_gf"; do
+    oc which "$exe" >/dev/null 2>&1 && { TH=$exe; break; }
+done
+[ -n "$TH" ] || die "в образе нет конвертера истории th_to_csv"
+echo "$TH" > "$IMG_DIR/TH_TO_CSV"
 oc test -f /opt/OpenCourant/openradioss_gui/inp2rad.py || die "в образе нет конвертера inp2rad.py"
 log "готово: OpenCourant $VERSION ($ARCH), образ: $IMAGE"
 log "внутри: $(oc mpirun --version 2>/dev/null | head -n1), $(oc python3 --version 2>&1)"

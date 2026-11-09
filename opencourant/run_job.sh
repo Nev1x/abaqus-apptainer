@@ -29,6 +29,20 @@ fi
 trap 'rm -rf "$D/.lock"' EXIT
 fail() { echo FAILED > "$D/STATUS"; echo "failed_step=$1" >> "$D/job.meta"; die "$2"; }
 
+# Расчёт (engine) уже завершился, а обработка (шаг 6) нет — не пересчитываем, продолжаем с шага 6
+RESUME=0
+if [ "${FORCE:-0}" != 1 ] && [ -f "$D/modelT01" ] && grep -q "NORMAL TERMINATION" "$D/engine.log" 2>/dev/null \
+        && ! grep -q "RUN KILLED" "$D/engine.log"; then
+    RESUME=1
+fi
+
+if [ $RESUME = 1 ]; then
+log "расчёт уже выполнен — продолжаю с шага 6 (пересчитать заново: FORCE=1)"
+echo RUNNING > "$D/STATUS"
+sed -i '/^failed_step=/d' "$D/job.meta"
+T0=$(date +%s)
+cd "$D"
+else
 rm -f "$D"/model* "$D"/*.log "$D/curve.csv"
 echo RUNNING > "$D/STATUS"
 cat > "$D/job.meta" <<EOF
@@ -73,10 +87,11 @@ grep -q "NORMAL TERMINATION\|TERMINATION WITH WARNING" starter.log && grep -qE "
 log "[5/6] engine: расчёт на $NP ядрах (на 16 ядрах ~10 мин; ход: tail -f $D/engine.log)"
 oc mpirun --bind-to none -np "$NP" engine_ompi_sp -i model_0001.rad > engine.log 2>&1 || true
 grep -q "NORMAL TERMINATION" engine.log && ! grep -q "RUN KILLED" engine.log || fail engine "расчёт не завершился нормально — см. конец $D/engine.log"
+fi
 CYCLES=$(grep "TOTAL NUMBER OF CYCLES" engine.log | awk '{print $NF}')
 
 log "[6/6] извлекаю кривую RF3(U3) и чищу временные файлы"
-oc "th_to_csv_$ARCH" modelT01 > th.log 2>&1 || fail th "не удалось прочитать историю modelT01 — см. $D/th.log"
+th_to_csv modelT01 > th.log 2>&1 || fail th "не удалось прочитать историю modelT01 — см. $D/th.log"
 oc python3 "$PROJECT_DIR/tools/oc_results.py" curve modelT01.csv curve.csv >> th.log 2>&1 \
     || fail curve "в истории нет перемещения/реакции опорной точки — см. $D/th.log"
 oc python3 "$PROJECT_DIR/tools/oc_results.py" analytic model.inp >> job.meta 2>> th.log || true

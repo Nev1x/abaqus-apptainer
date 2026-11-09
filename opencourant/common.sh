@@ -31,4 +31,18 @@ oc() {
         "$IMAGE" "$@"
 }
 
+# Имя конвертера истории в CSV: th_to_csv_linuxa64 (ARM) или th_to_csv_linux64_gf (x86-64).
+# Записывает setup.sh; для старых установок без этой записи ищем сами.
+th_to_csv() {
+    local exe
+    exe=$(cat "$IMG_DIR/TH_TO_CSV" 2>/dev/null || true)
+    if [ -z "$exe" ]; then
+        for exe in "th_to_csv_$ARCH" "th_to_csv_${ARCH}_gf" ""; do
+            [ -n "$exe" ] && oc which "$exe" >/dev/null 2>&1 && break
+        done
+    fi
+    [ -n "$exe" ] || { echo "в образе нет конвертера истории th_to_csv" >&2; return 1; }
+    oc "$exe" "$@"
+}
+
 sha256() { (sha256sum "$1" 2>/dev/null || shasum -a 256 "$1") | cut -d' ' -f1; }
